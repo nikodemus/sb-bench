@@ -11,12 +11,8 @@
        (defun ,name (,iterations ,@lambda-list)
          (declare (fixnum ,iterations))
          (let (,res)
-           ;; Open coding is good for the soul.
-           (when (oddp ,iterations)
-             (setf ,res (progn ,@body)))
-           (loop repeat (truncate ,iterations 2)
-                 do (setf ,res (progn ,@body))
-                    (setf ,res (progn ,@body)))
+           (loop repeat ,iterations
+                 do (setf ,res (progn ,@body)))
            ,res))
        (setf (gethash ',name *benchmarks*)
              (list :seconds ,seconds :arguments (list ,@arguments))))))
