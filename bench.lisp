@@ -43,6 +43,22 @@
                  (return (* iterations (round (* internal-time-units-per-second seconds)
                                               run-time))))))))))
 
+(defun mean (samples)
+  (declare (type (simple-array fixnum (*)) samples))
+  (/ (loop for elt across samples summing elt) (length samples)))
+
+(defun variance (samples)
+  (declare (type (simple-array fixnum (*)) samples))
+  (let ((mean (mean samples)))
+    (/ (reduce (lambda (a b)
+                 (+ a (expt (- b mean) 2)))
+               samples
+               :initial-value 0)
+       (length samples))))
+
+(defun standard-deviation (samples)
+  (sqrt (variance samples)))
+
 (defun run-benchmark (name &key (arguments t) seconds runs iterations)
   (multiple-value-bind (fun info) (get-benchmark name)
     (declare (function fun))
@@ -70,14 +86,14 @@
         (loop repeat runs
               do (apply #'call-with-timing #'time-run fun run-arguments)
                  (incf run)))
-      (let* ((mean (alexandria:mean samples))
-             (std-deviation (alexandria:standard-deviation samples)))
+      (let* ((mean (mean samples))
+             (std-deviation (standard-deviation samples)))
         (list name
               :runs runs
               :iterations/run iterations
               :mean-run-time (/ mean 1000000.0)
               :standard-deviation (/ std-deviation 1000000.0)
-              :bytes-consed (round (alexandria:mean consed))
+              :bytes-consed (round (mean consed))
               :quality (when (>= runs 10)
                          (round (- 100 (* 100.0 (/ std-deviation mean))))))))))
 
