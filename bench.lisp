@@ -4,12 +4,22 @@
 
 (defparameter *benchmarks* (make-hash-table))
 
-(defmacro defbenchmark (name (lambda-list arguments &key (repeat 1))
+(defmacro defbenchmark (name (lambda-list arguments &key (seconds 1.0))
                         &body body)
-  `(progn
-     (defun ,name ,lambda-list ,@body)
-     (setf (gethash ',name *benchmarks*)
-           (list :repeat ,repeat :arguments (list ,@arguments)))))
+  (with-unique-names (iterations res)
+    `(progn
+       (defun ,name (,iterations ,@lambda-list)
+         (declare (fixnum ,iterations))
+         (let (,res)
+           ;; Open coding is good for the soul.
+           (when (oddp ,iterations)
+             (setf ,res (progn ,@body)))
+           (loop repeat (truncate ,iterations 2)
+                 do (setf ,res (progn ,@body))
+                    (setf ,res (progn ,@body)))
+           ,res))
+       (setf (gethash ',name *benchmarks*)
+             (list :seconds ,seconds :arguments (list ,@arguments))))))
 
 (defun get-benchmark (name)
   (let ((info (or (gethash name *benchmarks*)
@@ -21,47 +31,65 @@
      ,@(loop repeat n
              collect `(progn ,@body))))
 
-(defun run-benchmark (name &key (arguments nil argsp) (repeat nil repeatp))
+(defun estimate-iterations-for-run-time (fun arguments seconds)
+  (declare (function fun))
+  (let ((iterations 1))
+    (declare (fixnum iterations))
+    (loop
+      (let ((trial-arguments (cons iterations arguments))
+            (start (get-internal-run-time)))
+        (declare (dynamic-extent trial-arguments))
+        (apply fun trial-arguments)
+        (let ((run-time (- (get-internal-run-time) start)))
+          (cond ((> 10 run-time)
+                 (setf iterations (* iterations 10)))
+                (t
+                 (return (* iterations (round (* internal-time-units-per-second seconds)
+                                              run-time))))))))))
+
+(defun run-benchmark (name &key (arguments t) seconds runs iterations)
   (multiple-value-bind (fun info) (get-benchmark name)
     (declare (function fun))
-    (let* ((arguments (if argsp arguments (getf info :arguments)))
-           (repeat (if repeatp repeat (getf info :repeat)))
-           (samples (make-array repeat :element-type 'fixnum))
-           (consed (make-array repeat :element-type 'fixnum))
+    (let* ((arguments (if (eq t arguments) (getf info :arguments) arguments))
+           (seconds (or seconds (getf info :seconds)))
+           (runs (or runs 1))
+           (iterations (or iterations
+                           (estimate-iterations-for-run-time fun arguments seconds)))
+           (run-arguments (cons iterations arguments))
+           (samples (make-array runs :element-type 'fixnum))
+           (consed (make-array runs :element-type 'fixnum))
            (run 0))
-      (declare (fixnum run repeat))
-      (declare (sb-int:truly-dynamic-extent samples consed))
+      (declare (fixnum run runs))
+      (declare (sb-int:truly-dynamic-extent samples consed run-arguments))
       (flet ((time-run (&key
                         user-run-time-us
                         system-run-time-us
                         bytes-consed
-                        aborted
                         &allow-other-keys)
                (declare (fixnum user-run-time-us system-run-time-us))
-               (unless aborted
-                 (setf (aref samples run)
-                       (+ user-run-time-us system-run-time-us))
-                 (setf (aref consed run) bytes-consed))))
+               (setf (aref samples run) (+ user-run-time-us system-run-time-us)
+                     (aref consed run) bytes-consed)))
         (declare (dynamic-extent #'time-run))
         (gc :full t)
-        (loop repeat repeat
-              do (apply #'call-with-timing #'time-run fun arguments)
-              (incf run)))
-      (if (> repeat 1)
-          (let* ((mean (float (alexandria:mean samples)))
-                 (std-deviation (float (alexandria:standard-deviation samples))))
-            (list name
-                  :run-time mean
-                  :standard-deviation std-deviation
-                  :bytes-consed (round (alexandria:mean consed))
-                  :quality (round (- 100 (* 100.0 (/ std-deviation mean))))))
-          (list name (aref samples 0))))))
+        (loop repeat runs
+              do (apply #'call-with-timing #'time-run fun run-arguments)
+                 (incf run)))
+      (let* ((mean (float (alexandria:mean samples)))
+             (std-deviation (float (alexandria:standard-deviation samples))))
+        (list name
+              :runs runs
+              :iterations iterations
+              :mean-run-time mean
+              :standard-deviation std-deviation
+              :bytes-consed (round (alexandria:mean consed))
+              :quality (when (>= runs 10)
+                         (round (- 100 (* 100.0 (/ std-deviation mean))))))))))
 
-(defun run-benchmarks ()
+(defun run-benchmarks (&key (runs 10) seconds)
   (let (results)
     (maphash (lambda (name info)
                (declare (ignore info))
-               (push (run-benchmark name) results))
+               (push (run-benchmark name :runs runs :seconds seconds) results))
              *benchmarks*)
     results))
 
