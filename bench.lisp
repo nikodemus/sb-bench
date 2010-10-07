@@ -70,13 +70,13 @@
         (loop repeat runs
               do (apply #'call-with-timing #'time-run fun run-arguments)
                  (incf run)))
-      (let* ((mean (float (alexandria:mean samples)))
-             (std-deviation (float (alexandria:standard-deviation samples))))
+      (let* ((mean (alexandria:mean samples))
+             (std-deviation (alexandria:standard-deviation samples)))
         (list name
               :runs runs
-              :iterations iterations
-              :mean-run-time mean
-              :standard-deviation std-deviation
+              :iterations/run iterations
+              :mean-run-time (/ mean 1000000.0)
+              :standard-deviation (/ std-deviation 1000000.0)
               :bytes-consed (round (alexandria:mean consed))
               :quality (when (>= runs 10)
                          (round (- 100 (* 100.0 (/ std-deviation mean))))))))))
