@@ -129,13 +129,17 @@
                                   (round
                                    (- 100 (* 50.0 (+ run-time-q real-time-q)))))))))))))
 
+(defun read-saved-result (pathname)
+   (with-open-file (f pathname :external-format :utf-8)
+     (with-standard-io-syntax
+       (read f))))
+
 (defun run-benchmarks (&key (runs 10) seconds save-as baseline)
   (let ((results nil)
         (pathname (when save-as
                     (ensure-directories-exist save-as))))
     (if baseline
-        (dolist (spec (with-open-file (f baseline :external-format :utf-8)
-                        (with-standard-io-syntax (cdr (read f)))))
+        (dolist (spec (cdr (read-saved-result baseline)))
           (destructuring-bind (name &key runs iterations/run &allow-other-keys) spec
             (push (run-benchmark name :runs runs :iterations iterations/run) results)))
         (maphash (lambda (name info)
@@ -152,3 +156,58 @@
             (prin1 (cons (namestring save-as) results) f)
             (terpri f)))))
     results))
+
+(defun ensure-result-set (result-set)
+  (if (consp result-set)
+      result-set
+      (read-saved-result result-set)))
+
+(defun collate-results (result-sets &key (min-quality 90))
+  (let ((results (make-hash-table)))
+    (dolist (set (mapcar #'ensure-result-set result-sets))
+      (let ((setname (pop set)))
+        (dolist (benchmark set)
+          (destructuring-bind
+                (name &key runs iterations/run run-time gc-run-time real-time bytes-consed
+                      quality)
+              benchmark
+            (when (and min-quality (< quality min-quality))
+              (cerror "Let it pass." "Result from ~A below required minimum quality:~%  ~S"
+                      setname benchmark))
+            (let ((data (gethash name results))
+                  (this (list setname
+                              :run-time run-time :gc-run-time gc-run-time
+                              :real-time real-time :bytes-consed bytes-consed
+                              :quality quality)))
+              (if data
+                  (let ((spec (car data)))
+                    (unless (and (eql (car spec) runs)
+                                 (eql (cdr spec) iterations/run))
+                      (error "Result set ~A is incompatible with others." setname))
+                    (push this (cdr data)))
+                  (setf (gethash name results)
+                        (cons (cons runs iterations/run)
+                              (list this)))))))))
+    (let (summary)
+      (maphash (lambda (name data)
+                 (push (cons name (nreverse (cdr data))) summary))
+               results)
+      summary)))
+
+(defun report (result-sets &key (min-quality 90)
+               (stream *standard-output*))
+  (let* ((result-sets (mapcar #'ensure-result-set result-sets))
+         (summary (collate-results result-sets :min-quality min-quality))
+         (colsize (+ 2 (reduce #'max (mapcar (lambda (set) (length (car set))) result-sets))))
+         (namesize (reduce #'max (mapcar (lambda (benchmark)
+                                           (length (prin1-to-string (car benchmark))))
+                                         summary))))
+    (format stream "~&~vT~{  ~A~^~}~%" namesize (mapcar #'car result-sets))
+    (dolist (benchmark summary)
+      (let ((name (pop benchmark)))
+        (format stream "~vS~:{~v,2F~}~%"
+                namesize
+                name
+                (mapcar (lambda (info)
+                          (list colsize (car (getf (cdr info) :run-time))))
+                        benchmark))))))

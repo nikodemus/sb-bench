@@ -6,4 +6,5 @@
    #:run-benchmarks
    #:run-benchmark
    #:defbenchmark
-   #:open-code))
+   #:open-code
+   #:report))
