@@ -4,6 +4,11 @@
 
 (defparameter *benchmarks* (make-hash-table))
 
+(defun get-benchmark (name)
+  (let ((info (or (gethash name *benchmarks*)
+                  (error "Unknown benchmark: ~S" name))))
+    (values (fdefinition name) info)))
+
 (defmacro defbenchmark (name (lambda-list arguments &key (seconds 1.0))
                         &body body)
   (with-unique-names (iterations res)
@@ -16,11 +21,6 @@
            ,res))
        (setf (gethash ',name *benchmarks*)
              (list :seconds ,seconds :arguments (list ,@arguments))))))
-
-(defun get-benchmark (name)
-  (let ((info (or (gethash name *benchmarks*)
-                  (error "Unknown benchmark: ~S" name))))
-    (values (fdefinition name) info)))
 
 (defmacro open-code ((n) &body body)
   `(progn
@@ -45,40 +45,8 @@
                                                       seconds)
                                                    run-time)))))))))))
 
-;;; FIXME: Perhaps use geomeric mean instead?
-(defun sample-statistics (samples)
-  "Returns min, mean, max, and standard-error of SAMPLES as multiple
-values."
-  (declare (type (simple-array fixnum (*)) samples))
-  ;; Written this way so that we can get by with just two traversals.
-  (let* ((p 1)
-         (n (length samples))
-         (elt (aref samples 0))
-         (min elt)
-         (max elt)
-         (sum elt))
-    (loop while (< p n)
-          do (setf elt (aref samples p))
-             (cond ((< elt min)
-                    (setf min elt))
-                   ((> elt max)
-                    (setf max elt)))
-             (incf sum elt)
-             (incf p))
-    (setf p 0)
-    (let ((mean (/ sum n))
-          (var 0))
-      (loop while (< p n)
-            do (setf elt (aref samples p))
-               (incf var (expt (- elt mean) 2))
-               (incf p))
-      (let* ((variance (/ var n))
-             (standard-deviation (sqrt variance)))
-        (values min mean max (/ standard-deviation (sqrt n)))))))
-
-(defvar *benchmark-result-hook* 'process-benchmark-results)
-
 (defun run-benchmark (name &key (arguments t) seconds runs iterations)
+  "Runs a single benchmark benchmark and returns the dataset for that run."
   (multiple-value-bind (fun info) (get-benchmark name)
     (declare (function fun))
     (let* ((arguments (if (eq t arguments) (getf info :arguments) arguments))
@@ -87,16 +55,12 @@ values."
            (iterations (or iterations
                            (estimate-iterations-for-run-time fun arguments seconds)))
            (run-arguments (cons iterations arguments))
-           (run-time (make-array runs :element-type 'fixnum))
-           (gc-run-time (make-array runs :element-type 'fixnum))
-           (real-time (make-array runs :element-type 'fixnum))
-           (consed (make-array runs :element-type 'fixnum))
+           (run-time (make-array runs :element-type '(unsigned-byte 32)))
+           (gc-run-time (make-array runs :element-type '(unsigned-byte 32)))
+           (real-time (make-array runs :element-type '(unsigned-byte 32)))
+           (consed (make-array runs :element-type '(unsigned-byte 32)))
            (run 0))
       (declare (fixnum run runs))
-      ;; TRULY-DYNAMIC-EXTENT because the compiler cannot prove that sample vectors will
-      ;; fit on one page each.
-      (declare (sb-int:truly-dynamic-extent
-                run-time gc-run-time real-time consed run-arguments))
       (unless (typep iterations `(integer 1 ,most-positive-fixnum))
         (error "Number of iterations must be a positive fixnum."))
       (unless (typep runs `(integer 1 ,most-positive-fixnum))
@@ -118,32 +82,20 @@ values."
         (loop repeat runs
               do (apply #'call-with-timing #'time-run fun run-arguments)
               (incf run)))
-      (funcall *benchmark-result-hook*
-               name runs iterations
-               :run-time-us run-time
-               :real-time-ms real-time
-               :gc-run-time-ms gc-run-time
-               :bytes-consed consed))))
+      (make-instance 'dataset
+                     :benchmark-name name
+                     :benchmark-runs runs
+                     :benchmark-iterations/run iterations
+                     :run-time-us-samples run-time
+                     :real-time-ms-samples real-time
+                     :gc-run-time-ms-samples gc-run-time
+                     :bytes-consed-samples consed))))
 
-(defun process-benchmark-results (name runs iterations &key
-                                  run-time-us real-time-ms gc-run-time-ms bytes-consed)
-  (labels ((us-to-sec (us)
-             (/ us (expt 10.0 6)))
-           (ms-to-sec (ms)
-             (/ ms (expt 10.0 3)))
-           (process-samples (conv samples)
-             (multiple-value-bind (min mean max error) (sample-statistics samples)
-               (list (funcall conv mean)
-                     :min (funcall conv min)
-                     :max (funcall conv max)
-                     :standard-error (funcall conv error)))))
-    (list name
-          :runs runs
-          :iterations/run iterations
-          :run-time (process-samples #'us-to-sec run-time-us)
-          :real-time (process-samples #'ms-to-sec real-time-ms)
-          :gc-run-time (process-samples #'ms-to-sec gc-run-time-ms)
-          :bytes-consed (process-samples #'float bytes-consed))))
+(defun us-to-sec (us)
+  (/ us (expt 10.0 6)))
+
+(defun ms-to-sec (ms)
+  (/ ms (expt 10.0 3)))
 
 (defun read-saved-result (pathname)
    (with-open-file (f pathname :external-format :utf-8)
