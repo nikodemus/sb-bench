@@ -40,8 +40,10 @@
           (cond ((> 10 run-time)
                  (setf iterations (* iterations 10)))
                 (t
-                 (return (* iterations (round (* internal-time-units-per-second seconds)
-                                              run-time))))))))))
+                 (return (max 1
+                              (* iterations (round (* internal-time-units-per-second
+                                                      seconds)
+                                                   run-time)))))))))))
 
 (defun mean (samples)
   (declare (type (simple-array fixnum (*)) samples))
@@ -73,6 +75,10 @@
            (run 0))
       (declare (fixnum run runs))
       (declare (sb-int:truly-dynamic-extent samples consed run-arguments))
+      (unless (typep iterations `(integer 1 ,most-positive-fixnum))
+        (error "Number of iterations must be a positive fixnum."))
+      (unless (typep runs `(integer 1 ,most-positive-fixnum))
+        (error "Number of runs must be a positive fixnum."))
       (flet ((time-run (&key
                         user-run-time-us
                         system-run-time-us
