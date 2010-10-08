@@ -61,6 +61,10 @@
 (defun standard-deviation (samples)
   (sqrt (variance samples)))
 
+(defun standard-error (samples)
+  (/ (standard-deviation samples)
+     (sqrt (length samples))))
+
 (defun run-benchmark (name &key (arguments t) seconds runs iterations)
   (multiple-value-bind (fun info) (get-benchmark name)
     (declare (function fun))
@@ -102,29 +106,29 @@
               do (apply #'call-with-timing #'time-run fun run-arguments)
               (incf run)))
       (let ((run-time-mean (mean run-time))
-            (run-time-sdev (standard-deviation run-time))
+            (run-time-error (standard-error run-time))
             (real-time-mean (mean real-time))
-            (real-time-sdev (standard-deviation real-time)))
+            (real-time-error (standard-error real-time)))
         (list name
              :runs runs
              :iterations/run iterations
              :run-time
              (list (/ run-time-mean (expt 10.0 6))
-                   (/ run-time-sdev (expt 10.0 6)))
+                   (/ run-time-error (expt 10.0 6)))
              :gc-run-time
              (list (/ (mean gc-run-time) 1000.0)
-                   (/ (standard-deviation gc-run-time) 1000.0))
+                   (/ (standard-error gc-run-time) 1000.0))
              :real-time
              (list (/ real-time-mean 1000.0)
-                   (/ real-time-sdev 1000.0))
+                   (/ real-time-error 1000.0))
              :bytes-consed
              (list (round (mean consed))
-                   (float (standard-deviation consed)))
+                   (float (standard-error consed)))
              :quality (when (>= runs 10)
                         (if (or (zerop run-time-mean) (zerop real-time-mean))
                             0
-                            (let ((run-time-q (/ run-time-sdev run-time-mean))
-                                  (real-time-q (/ real-time-sdev real-time-mean)))
+                            (let ((run-time-q (/ run-time-error run-time-mean))
+                                  (real-time-q (/ real-time-error real-time-mean)))
                               (max 0
                                   (round
                                    (- 100 (* 50.0 (+ run-time-q real-time-q)))))))))))))
