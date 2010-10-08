@@ -129,11 +129,26 @@
                                   (round
                                    (- 100 (* 50.0 (+ run-time-q real-time-q)))))))))))))
 
-(defun run-benchmarks (&key (runs 10) seconds)
-  (let (results)
-    (maphash (lambda (name info)
-               (declare (ignore info))
-               (push (run-benchmark name :runs runs :seconds seconds) results))
-             *benchmarks*)
+(defun run-benchmarks (&key (runs 10) seconds save-as baseline)
+  (let ((results nil)
+        (pathname (when save-as
+                    (ensure-directories-exist save-as))))
+    (if baseline
+        (dolist (spec (with-open-file (f baseline :external-format :utf-8)
+                        (with-standard-io-syntax (cdr (read f)))))
+          (destructuring-bind (name &key runs iterations/run &allow-other-keys) spec
+            (push (run-benchmark name :runs runs :iterations iterations/run) results)))
+        (maphash (lambda (name info)
+                   (declare (ignore info))
+                   (push (run-benchmark name :runs runs :seconds seconds) results))
+                 *benchmarks*))
+    (when pathname
+      (with-simple-restart (continue "Ignore the error and return the results.")
+        (with-open-file (f pathname
+                           :direction :output
+                           :if-exists :supersede
+                           :external-format :utf-8)
+          (with-standard-io-syntax
+            (prin1 (cons (namestring save-as) results) f)
+            (terpri f)))))
     results))
-
