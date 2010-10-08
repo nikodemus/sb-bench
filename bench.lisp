@@ -108,30 +108,41 @@
       (let ((run-time-mean (mean run-time))
             (run-time-error (standard-error run-time))
             (real-time-mean (mean real-time))
-            (real-time-error (standard-error real-time)))
+            (real-time-error (standard-error real-time))
+            (measurement-error (/ 1 (sqrt runs))))
         (list name
-             :runs runs
-             :iterations/run iterations
-             :run-time
-             (list (/ run-time-mean (expt 10.0 6))
-                   (/ run-time-error (expt 10.0 6)))
-             :gc-run-time
-             (list (/ (mean gc-run-time) 1000.0)
-                   (/ (standard-error gc-run-time) 1000.0))
-             :real-time
-             (list (/ real-time-mean 1000.0)
-                   (/ real-time-error 1000.0))
-             :bytes-consed
-             (list (round (mean consed))
-                   (float (standard-error consed)))
-             :quality (when (>= runs 10)
-                        (if (or (zerop run-time-mean) (zerop real-time-mean))
-                            0
-                            (let ((run-time-q (/ run-time-error run-time-mean))
-                                  (real-time-q (/ real-time-error real-time-mean)))
-                              (max 0
-                                  (round
-                                   (- 100 (* 50.0 (+ run-time-q real-time-q)))))))))))))
+              :runs runs
+              :iterations/run iterations
+              :run-time
+              (let ((sec (/ run-time-mean (expt 10.0 6))))
+                (list sec
+                      (/ run-time-error (expt 10.0 6))
+                      (* sec measurement-error)))
+              :real-time
+              (let ((sec (/ real-time-mean 1000.0)))
+                (list sec
+                      (/ real-time-error 1000.0)
+                      (* sec measurement-error)))
+              :gc-run-time
+              (let ((sec (/ (mean gc-run-time) 1000.0)))
+                (list sec
+                      (/ (standard-error gc-run-time) 1000.0)
+                      (* sec measurement-error)))
+              :bytes-consed
+              (let ((bytes (round (mean consed))))
+                (list bytes
+                      (float (standard-error consed))
+                      (* bytes measurement-error)))
+              :quality
+              (round
+               (max 0
+                    (min (- 100 (* 100 measurement-error))
+                         (if (plusp run-time-mean)
+                             (- 100 (* 100 (/ run-time-error run-time-mean)))
+                             0)
+                         (if (plusp real-time-mean)
+                             (- 100 (* 100 (/ real-time-error real-time-mean)))
+                             0)))))))))
 
 (defun read-saved-result (pathname)
    (with-open-file (f pathname :external-format :utf-8)
