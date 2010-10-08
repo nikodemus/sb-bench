@@ -45,25 +45,38 @@
                                                       seconds)
                                                    run-time)))))))))))
 
-(defun mean (samples)
+;;; FIXME: Perhaps use geomeric mean instead?
+(defun sample-statistics (samples)
+  "Returns min, mean, max, and standard-error of SAMPLES as multiple
+values."
   (declare (type (simple-array fixnum (*)) samples))
-  (/ (loop for elt across samples summing elt) (length samples)))
+  ;; Written this way so that we can get by with just two traversals.
+  (let* ((p 1)
+         (n (length samples))
+         (elt (aref samples 0))
+         (min elt)
+         (max elt)
+         (sum elt))
+    (loop while (< p n)
+          do (setf elt (aref samples p))
+             (cond ((< elt min)
+                    (setf min elt))
+                   ((> elt max)
+                    (setf max elt)))
+             (incf sum elt)
+             (incf p))
+    (setf p 0)
+    (let ((mean (/ sum n))
+          (var 0))
+      (loop while (< p n)
+            do (setf elt (aref samples p))
+               (incf var (expt (- elt mean) 2))
+               (incf p))
+      (let* ((variance (/ var n))
+             (standard-deviation (sqrt variance)))
+        (values min mean max (/ standard-deviation (sqrt n)))))))
 
-(defun variance (samples)
-  (declare (type (simple-array fixnum (*)) samples))
-  (let ((mean (mean samples)))
-    (/ (reduce (lambda (a b)
-                 (+ a (expt (- b mean) 2)))
-               samples
-               :initial-value 0)
-       (length samples))))
-
-(defun standard-deviation (samples)
-  (sqrt (variance samples)))
-
-(defun standard-error (samples)
-  (/ (standard-deviation samples)
-     (sqrt (length samples))))
+(defvar *benchmark-result-hook* 'process-benchmark-results)
 
 (defun run-benchmark (name &key (arguments t) seconds runs iterations)
   (multiple-value-bind (fun info) (get-benchmark name)
@@ -105,62 +118,61 @@
         (loop repeat runs
               do (apply #'call-with-timing #'time-run fun run-arguments)
               (incf run)))
-      (let ((run-time-mean (mean run-time))
-            (run-time-error (standard-error run-time))
-            (real-time-mean (mean real-time))
-            (real-time-error (standard-error real-time))
-            (measurement-error (/ 1 (sqrt runs))))
-        (list name
-              :runs runs
-              :iterations/run iterations
-              :run-time
-              (let ((sec (/ run-time-mean (expt 10.0 6))))
-                (list sec
-                      (/ run-time-error (expt 10.0 6))
-                      (* sec measurement-error)))
-              :real-time
-              (let ((sec (/ real-time-mean 1000.0)))
-                (list sec
-                      (/ real-time-error 1000.0)
-                      (* sec measurement-error)))
-              :gc-run-time
-              (let ((sec (/ (mean gc-run-time) 1000.0)))
-                (list sec
-                      (/ (standard-error gc-run-time) 1000.0)
-                      (* sec measurement-error)))
-              :bytes-consed
-              (let ((bytes (round (mean consed))))
-                (list bytes
-                      (float (standard-error consed))
-                      (* bytes measurement-error)))
-              :quality
-              (round
-               (max 0
-                    (min (- 100 (* 100 measurement-error))
-                         (if (plusp run-time-mean)
-                             (- 100 (* 100 (/ run-time-error run-time-mean)))
-                             0)
-                         (if (plusp real-time-mean)
-                             (- 100 (* 100 (/ real-time-error real-time-mean)))
-                             0)))))))))
+      (funcall *benchmark-result-hook*
+               name runs iterations
+               :run-time-us run-time
+               :real-time-ms real-time
+               :gc-run-time-ms gc-run-time
+               :bytes-consed consed))))
+
+(defun process-benchmark-results (name runs iterations &key
+                                  run-time-us real-time-ms gc-run-time-ms bytes-consed)
+  (labels ((us-to-sec (us)
+             (/ us (expt 10.0 6)))
+           (ms-to-sec (ms)
+             (/ ms (expt 10.0 3)))
+           (process-samples (conv samples)
+             (multiple-value-bind (min mean max error) (sample-statistics samples)
+               (list (funcall conv mean)
+                     :min (funcall conv min)
+                     :max (funcall conv max)
+                     :standard-error (funcall conv error)))))
+    (list name
+          :runs runs
+          :iterations/run iterations
+          :run-time (process-samples #'us-to-sec run-time-us)
+          :real-time (process-samples #'ms-to-sec real-time-ms)
+          :gc-run-time (process-samples #'ms-to-sec gc-run-time-ms)
+          :bytes-consed (process-samples #'float bytes-consed))))
 
 (defun read-saved-result (pathname)
    (with-open-file (f pathname :external-format :utf-8)
      (with-standard-io-syntax
        (read f))))
 
-(defun run-benchmarks (&key (runs 10) seconds save-as baseline)
+(defun ensure-result-set (result-set)
+  (if (consp result-set)
+      result-set
+      (read-saved-result result-set)))
+
+(defvar *run-counter* 0)
+
+(defun gen-name ()
+  (format nil "run-~A" (incf *run-counter*)))
+
+(defun run-benchmarks (&key (runs 10) seconds save baseline (name (gen-name)))
   (let ((results nil)
-        (pathname (when save-as
-                    (ensure-directories-exist save-as))))
+        (pathname (when save
+                    (ensure-directories-exist name))))
     (if baseline
-        (dolist (spec (cdr (read-saved-result baseline)))
+        (dolist (spec (cdr (ensure-result-set baseline)))
           (destructuring-bind (name &key runs iterations/run &allow-other-keys) spec
             (push (run-benchmark name :runs runs :iterations iterations/run) results)))
         (maphash (lambda (name info)
                    (declare (ignore info))
                    (push (run-benchmark name :runs runs :seconds seconds) results))
                  *benchmarks*))
+    (push (namestring name) results)
     (when pathname
       (with-simple-restart (continue "Ignore the error and return the results.")
         (with-open-file (f pathname
@@ -168,32 +180,22 @@
                            :if-exists :supersede
                            :external-format :utf-8)
           (with-standard-io-syntax
-            (prin1 (cons (namestring save-as) results) f)
+            (prin1 results f)
             (terpri f)))))
     results))
 
-(defun ensure-result-set (result-set)
-  (if (consp result-set)
-      result-set
-      (read-saved-result result-set)))
-
-(defun collate-results (result-sets &key (min-quality 90))
+(defun collate-results (result-sets)
   (let ((results (make-hash-table)))
     (dolist (set (mapcar #'ensure-result-set result-sets))
       (let ((setname (pop set)))
         (dolist (benchmark set)
           (destructuring-bind
-                (name &key runs iterations/run run-time gc-run-time real-time bytes-consed
-                      quality)
+                (name &key runs iterations/run run-time gc-run-time real-time bytes-consed)
               benchmark
-            (when (and min-quality (< quality min-quality))
-              (cerror "Let it pass." "Result from ~A below required minimum quality:~%  ~S"
-                      setname benchmark))
             (let ((data (gethash name results))
                   (this (list setname
                               :run-time run-time :gc-run-time gc-run-time
-                              :real-time real-time :bytes-consed bytes-consed
-                              :quality quality)))
+                              :real-time real-time :bytes-consed bytes-consed)))
               (if data
                   (let ((spec (car data)))
                     (unless (and (eql (car spec) runs)
@@ -205,14 +207,25 @@
                               (list this)))))))))
     (let (summary)
       (maphash (lambda (name data)
-                 (push (cons name (nreverse (cdr data))) summary))
+                 (push (list* name (caar data) (nreverse (cdr data))) summary))
                results)
       summary)))
 
-(defun report (result-sets &key (min-quality 90)
-               (stream *standard-output*))
+(defun benchmark-error-estimate (benchmark)
+  (max
+   ;; Measurement error
+   (* (/ 1 (sqrt (pop benchmark)))
+      (reduce #'max (mapcar (lambda (res)
+                              (car (getf (cdr res) :run-time)))
+                            (cdr benchmark))))
+   ;; Standard error
+   (reduce #'max (mapcar (lambda (res)
+                           (getf (cdr (getf (cdr res) :run-time)) :standard-error))
+                         (cdr benchmark)))))
+
+(defun report (result-sets &key (stream *standard-output*))
   (let* ((result-sets (mapcar #'ensure-result-set result-sets))
-         (summary (collate-results result-sets :min-quality min-quality))
+         (summary (collate-results result-sets))
          (colsize (+ 2 (reduce #'max (mapcar (lambda (set) (length (car set))) result-sets))))
          (namesize (reduce #'max (mapcar (lambda (benchmark)
                                            (length (prin1-to-string (car benchmark))))
@@ -220,9 +233,10 @@
     (format stream "~&~vT~{  ~A~^~}~%" namesize (mapcar #'car result-sets))
     (dolist (benchmark summary)
       (let ((name (pop benchmark)))
-        (format stream "~vS~:{~v,2F~}~%"
+        (format stream "~vS~:{~v,2F~}  error: ~,2F~%"
                 namesize
                 name
                 (mapcar (lambda (info)
                           (list colsize (car (getf (cdr info) :run-time))))
-                        benchmark))))))
+                        (cdr benchmark))
+                (benchmark-error-estimate benchmark))))))
