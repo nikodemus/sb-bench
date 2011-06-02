@@ -1,5 +1,12 @@
 (in-package :sb-bench)
 
+(deftype sample-vector ()
+  `(simple-array (unsigned-byte 32) (*)))
+
+(defun make-sample-vector (size)
+  (declare (fixnum size))
+  (make-array size :element-type '(unsigned-byte 32)))
+
 (defclass dataset ()
   ((benchmark-name
     :initarg :benchmark-name
@@ -29,16 +36,6 @@
    (cache
     :initform nil
     :accessor cache)))
-
-(defun statistics (dataset type)
-  (or (getf (cache dataset) type)
-      (setf (getf (cache dataset) type)
-            (sample-statistics
-             (ecase type
-               (:run-time-us (run-time-us-samples dataset))
-               (:real-time-ms (real-time-ms-samples dataset))
-               (:gc-run-time-ms (gc-run-time-ms-samples dataset))
-               (:bytes-consed (bytes-consed-samples dataset)))))))
 
 (defmethod print-object ((dataset dataset) stream)
   (print-unreadable-object (dataset stream)
@@ -119,7 +116,7 @@
                      :element-type '(unsigned-byte 32)
                      :direction :input)
     (unless (equal *dataset-file-header* (read-packed-string f))
-      (error "~A is not an SB-BENCH dataset file v1." pathname))
+      (error "~A is not an SB-BENCH dataset v1 file." pathname))
     (make-instance 'dataset
                    :comment (read-packed-string f)
                    :benchmark-name (read-symbol f)

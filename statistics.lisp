@@ -1,22 +1,5 @@
 (in-package :sb-bench)
 
-(defun format-universal-time ()
-  (multiple-value-bind (sec min hour date month year) (get-decoded-time)
-    (format nil "~D-~2,'0D-~2,'0D ~2,'0D:~2,'0D:~2,'0D"
-            year
-            month
-            date
-            hour
-            min
-            sec)))
-
-(deftype sample-vector ()
-  `(simple-array (unsigned-byte 32) (*)))
-
-(defun make-sample-vector (size)
-  (declare (fixnum size))
-  (make-array size :element-type '(unsigned-byte 32)))
-
 (defclass statistics ()
   ((mean :initarg :mean :reader mean-of)
    (min :initarg :min :reader min-of)
@@ -55,3 +38,13 @@
                        :mean mean
                        :max max
                        :standard-error (/ standard-deviation (sqrt n)))))))
+
+(defun statistics (dataset type)
+  (or (getf (cache dataset) type)
+      (setf (getf (cache dataset) type)
+            (sample-statistics
+             (ecase type
+               (:run-time-us (run-time-us-samples dataset))
+               (:real-time-ms (real-time-ms-samples dataset))
+               (:gc-run-time-ms (gc-run-time-ms-samples dataset))
+               (:bytes-consed (bytes-consed-samples dataset)))))))

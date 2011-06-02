@@ -11,4 +11,12 @@
                  (+ z z))))
     r))
 
+(sb-bench:defbenchmark char=.full ((x y z) (#\a #\b #\c) :seconds 1.0)
+  (let (r)
+    (sb-bench:open-code (100)
+      (setf r (or (char= x y)
+                  (char= x z)
+                  (char= y z)
+                  (char= x y z))))))
+
 (print (sb-bench:run-benchmarks))
